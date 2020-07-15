@@ -26,17 +26,10 @@ fn main() {
         IpAddr::from(test_peer.ip.to_owned()),
         test_peer.port.to_owned(),
     );
-    let conn = Connection::connect(test_peer, torrent.info_hash, peer_id);
+    let conn =
+        Connection::connect(test_peer, torrent.info_hash, peer_id).expect("connection failed");
 
-    match conn {
-        Ok(mut conn) => {
-            let hs = conn.complete_handshake().unwrap();
-            let msg = message::Message::read(&conn.stream).unwrap();
-
-            println!("{:?}", msg);
-        }
-        Err(_) => println!("Connection with {} timed out.", peer_addr),
-    }
+    let msg = message::Message::read(&conn.stream).unwrap();
 
     //    let hs = conn.complete_handshake().unwrap();
     //    let msg = message::Message::read(&conn.stream).unwrap();

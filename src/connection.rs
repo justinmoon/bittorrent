@@ -13,6 +13,7 @@ pub struct Handshake {
     pstr: String,
     info_hash: Vec<u8>,
     peer_id: Vec<u8>,
+    stream: TcpStream,
 }
 
 pub struct Connection {
@@ -21,18 +22,20 @@ pub struct Connection {
     peer: Peer,
     info_hash: Vec<u8>,
     peer_id: Vec<u8>,
+    bitfield: Vec<u8>,
 }
 
 impl Handshake {
-    fn new(info_hash: Vec<u8>, peer_id: Vec<u8>) -> Handshake {
+    fn new(stream: TcpStream, info_hash: Vec<u8>, peer_id: Vec<u8>) -> Handshake {
         Handshake {
             pstr: String::from("BitTorrent protocol"),
             info_hash,
             peer_id,
+            stream,
         }
     }
 
-    fn as_bytes(&self) -> Vec<u8> {
+    fn serialize(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
         result.push(self.pstr.len() as u8);
@@ -44,76 +47,71 @@ impl Handshake {
         result
     }
 
-    fn from_bytes(b: &[u8]) -> Result<Handshake, FromUtf8Error> {
+    fn check_response(&self, b: &[u8]) -> Result<(), Box<dyn Error>> {
+        // Deserialize (mainly care about info hash)
         let pstr_len = 19;
         let pstr = String::from_utf8(b[1..pstr_len + 1].to_vec())?;
         let info_hash = b[pstr_len + 1 + 8..pstr_len + 1 + 8 + 20].to_vec();
         let peer_id = &b[pstr_len + 1 + 8 + 20..];
         let peer_id = peer_id.to_vec();
 
-        Ok(Handshake {
-            pstr,
-            info_hash,
-            peer_id,
-        })
+        if self.info_hash.eq(&info_hash) {
+            println!("Successful handshake.");
+
+            Ok(())
+        } else {
+            println!(
+                "Expected info_hash: {:?} but got {:?}",
+                self.info_hash, info_hash
+            );
+            Err(Box::try_from("Incorrect info_hash.").unwrap())
+        }
+    }
+
+    pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
+        // Initiate handshake
+        self.stream.write_all(&self.serialize().as_slice())?;
+
+        // Receive and verify response
+        let mut buf = [0; 68];
+        self.stream.read_exact(&mut buf)?;
+        self.check_response(&buf)?;
+
+        Ok(())
     }
 }
 
 impl Connection {
+    // TODO: this should execute the handshake
     pub fn connect(
         peer: Peer,
         info_hash: Vec<u8>,
         peer_id: Vec<u8>,
-    ) -> Result<Connection, io::Error> {
+    ) -> Result<Connection, Box<dyn Error>> {
+        // Create TCP stream
         let addr = SocketAddr::new(IpAddr::from(peer.ip), peer.port);
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
 
-        //    conn.set_write_timeout(Some(Duration::from_secs(5)))?;
-        //    conn.set_read_timeout(Some(Duration::from_secs(5)))?;
+        // Execute bittorrent handshake with peer
+        // FIXME: cloning here is lame
+        Handshake::new(stream.try_clone()?, info_hash.clone(), peer_id.clone()).run()?;
 
+        // Receive bitfield
+        let msg = Message::read(&stream).unwrap();
+        let bitfield = match msg {
+            Message::Bitfield(bitfield) => bitfield,
+            _ => panic!("BAD BAD BAD"),
+        };
+
+        // Instantiate connection
         Ok(Connection {
             stream,
             chocked: true,
             peer,
             info_hash,
             peer_id,
+            bitfield,
         })
-    }
-
-    pub fn complete_handshake(&mut self) -> Result<Handshake, Box<dyn Error>> {
-        let hs = self.send_handshake()?;
-        let res_hs = self.receive_handshake()?;
-
-        if hs.info_hash.eq(&res_hs.info_hash) {
-            println!("Successful handshake.");
-
-            Ok(res_hs)
-        } else {
-            println!(
-                "Expected info_hash: {:?} but got {:?}",
-                hs.info_hash, res_hs.info_hash
-            );
-
-            Err(Box::try_from("Incorrect info_hash.").unwrap())
-        }
-    }
-
-    fn send_handshake(&mut self) -> Result<Handshake, io::Error> {
-        let hs = Handshake::new(self.info_hash.to_owned(), self.peer_id.to_owned());
-
-        self.stream.write_all(&hs.as_bytes().as_slice())?;
-
-        Ok(hs)
-    }
-
-    fn receive_handshake(&mut self) -> Result<Handshake, Box<dyn Error>> {
-        let mut buf = [0; 68];
-
-        self.stream.read_exact(&mut buf)?;
-
-        let res_hs = Handshake::from_bytes(&buf)?;
-
-        Ok(res_hs)
     }
 
     fn send_unchoke(&mut self) -> Result<(), Box<dyn Error>> {
@@ -194,7 +192,6 @@ impl Connection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::Message;
     use crate::torrent::Torrent;
     use crate::tracker::request_peers;
     use env_logger;
@@ -213,21 +210,7 @@ mod tests {
 
         // connect to the first peer
         let peer = peers_response.peers[2].clone();
-        let mut conn_result = Connection::connect(peer, torrent.info_hash, peer_id);
-
-        // check we could complete connection and first message contained bitfield
-        let mut conn = match conn_result {
-            Ok(mut conn) => {
-                conn.complete_handshake().unwrap();
-                let msg = Message::read(&conn.stream).unwrap();
-                match msg {
-                    Message::Bitfield(_) => { /* what we expected */ }
-                    _ => panic!("BAD BAD BAD"),
-                };
-                conn
-            }
-            Err(_) => panic!("BAD BAD WIRSE"),
-        };
+        let mut conn = Connection::connect(peer, torrent.info_hash, peer_id).unwrap();
 
         // download chunks
         conn.download().unwrap();
