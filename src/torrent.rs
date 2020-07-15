@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Deserialize, Serialize)]
-struct TorrentInfo {
+struct BencodeInfo {
     name: String,
     length: u64,
     #[serde(rename = "piece length")]
@@ -19,11 +19,11 @@ struct TorrentInfo {
 #[derive(Debug, Deserialize)]
 struct BencodeTorrent {
     announce: String,
-    info: TorrentInfo,
+    info: BencodeInfo,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Torrent {
+pub struct TorrentFile {
     name: String,
     pub announce: String,
     pub info_hash: Vec<u8>,
@@ -32,7 +32,7 @@ pub struct Torrent {
     pub piece_hashes: Vec<[u8; 20]>,
 }
 
-impl TorrentInfo {
+impl BencodeInfo {
     fn hash(&self) -> Result<Vec<u8>, serde_bencode::Error> {
         let bytes = serde_bencode::to_bytes(self)?;
         let mut hasher = Sha1::new();
@@ -44,7 +44,7 @@ impl TorrentInfo {
 }
 
 impl BencodeTorrent {
-    fn to_torrent(self) -> Result<Torrent, serde_bencode::Error> {
+    fn to_torrent_file(self) -> Result<TorrentFile, serde_bencode::Error> {
         // Check valid number of pieces
         assert!(self.info.pieces.len() % 20 == 0);
 
@@ -54,7 +54,7 @@ impl BencodeTorrent {
             piece_hashes.push(chunk.try_into().unwrap())
         }
 
-        Ok(Torrent {
+        Ok(TorrentFile {
             info_hash: self.info.hash()?,
             name: self.info.name,
             announce: self.announce,
@@ -65,11 +65,11 @@ impl BencodeTorrent {
     }
 }
 
-impl Torrent {
-    pub fn open(path: &Path) -> Result<Torrent, Box<dyn Error>> {
+impl TorrentFile {
+    pub fn open(path: &Path) -> Result<TorrentFile, Box<dyn Error>> {
         let file = fs::read(path)?;
         let bencode_torrent = serde_bencode::from_bytes::<BencodeTorrent>(&file)?;
-        let torrent = bencode_torrent.to_torrent()?;
+        let torrent = bencode_torrent.to_torrent_file()?;
 
         Ok(torrent)
     }
@@ -84,7 +84,7 @@ mod tests {
     #[test]
     pub fn test_it() {
         let ben_path = Path::new("data/archlinux-2019.12.01-x86_64.iso.torrent");
-        let torrent = Torrent::open(&ben_path).unwrap();
+        let torrent = TorrentFile::open(&ben_path).unwrap();
 
         let json_path = Path::new("data/archlinux-2019.12.01-x86_64.iso.torrent.json");
         let json: Value = serde_json::from_reader(File::open(json_path).unwrap()).unwrap();

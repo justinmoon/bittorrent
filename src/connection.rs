@@ -1,5 +1,5 @@
 use crate::message::Message;
-use crate::{torrent::Torrent, tracker::Peer};
+use crate::{torrent::TorrentFile, tracker::Peer};
 use byteorder::{BigEndian, WriteBytesExt};
 use std::convert::TryFrom;
 use std::error::Error;
@@ -14,15 +14,6 @@ pub struct Handshake {
     info_hash: Vec<u8>,
     peer_id: Vec<u8>,
     stream: TcpStream,
-}
-
-pub struct Connection {
-    pub stream: TcpStream,
-    chocked: bool,
-    peer: Peer,
-    info_hash: Vec<u8>,
-    peer_id: Vec<u8>,
-    bitfield: Vec<u8>,
 }
 
 impl Handshake {
@@ -81,6 +72,16 @@ impl Handshake {
     }
 }
 
+#[derive(Debug)]
+pub struct Connection {
+    pub stream: TcpStream,
+    pub choked: bool,
+    pub peer: Peer,
+    pub info_hash: Vec<u8>,
+    pub peer_id: Vec<u8>,
+    pub bitfield: Vec<u8>,
+}
+
 impl Connection {
     // TODO: this should execute the handshake
     pub fn connect(
@@ -106,7 +107,7 @@ impl Connection {
         // Instantiate connection
         Ok(Connection {
             stream,
-            chocked: true,
+            choked: true,
             peer,
             info_hash,
             peer_id,
@@ -114,7 +115,7 @@ impl Connection {
         })
     }
 
-    fn send_unchoke(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn send_unchoke(&mut self) -> Result<(), Box<dyn Error>> {
         let msg = Message::Unchoke;
         let payload = vec![];
         let bytes = msg.serialize(&payload);
@@ -122,7 +123,7 @@ impl Connection {
         Ok(())
     }
 
-    fn send_interested(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn send_interested(&mut self) -> Result<(), Box<dyn Error>> {
         let msg = Message::Interested;
         let payload = vec![];
         let bytes = msg.serialize(&payload);
@@ -130,7 +131,7 @@ impl Connection {
         Ok(())
     }
 
-    fn send_request(
+    pub fn send_request(
         &mut self,
         index: u32,
         requested: u32,
@@ -192,7 +193,7 @@ impl Connection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::torrent::Torrent;
+    use crate::torrent::TorrentFile;
     use crate::tracker::request_peers;
     use env_logger;
     use rand::Rng;
@@ -203,7 +204,7 @@ mod tests {
         env_logger::init();
         // Get some peers
         let ben_path = Path::new("data/ubuntu-18.04.4-desktop-amd64.iso.torrent");
-        let torrent = Torrent::open(&ben_path).unwrap();
+        let torrent = TorrentFile::open(&ben_path).unwrap();
         let peer_id = rand::thread_rng().gen::<[u8; 20]>().to_vec();
         let port = 6881;
         let peers_response = request_peers(&torrent, &peer_id, &port).unwrap();
